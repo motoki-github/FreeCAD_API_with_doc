@@ -5,7 +5,7 @@ import sys
 import os
 import re
 from openai import OpenAI
-from PySide2 import QtWidgets, QtCore
+from PySide6 import QtWidgets, QtCore
 import FreeCAD as App
 import FreeCADGui as Gui
 
