@@ -5,9 +5,10 @@ import sys
 import os
 import re
 from openai import OpenAI
-from PySide6 import QtWidgets, QtCore
 import FreeCAD as App
 import FreeCADGui as Gui
+from PySide2 import QtWidgets, QtCore
+
 
 # OpenAI/DeepSeekクライアント取得関数
 # provider: 'DeepSeek' または 'ChatGPT'
