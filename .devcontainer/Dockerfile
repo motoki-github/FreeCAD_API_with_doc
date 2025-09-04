@@ -13,7 +13,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # 汎用的な開発ツール
     git curl ca-certificates build-essential pkg-config \
     libegl1 libxkbcommon-dev libgl1-mesa-glx libdbus-1-3 \
-    freecad \
+    freecad libxcb-cursor0\
+    # locales fontconfig \
+    # fonts-noto-cjk fonts-noto-cjk-extra fonts-noto-color-emoji \
+    # && sed -i 's/^# *ja_JP.UTF-8 UTF-8/ja_JP.UTF-8 UTF-8/' /etc/locale.gen \
+    # && locale-gen ja_JP.UTF-8 \
+    # && update-locale LANG=ja_JP.UTF-8 LC_CTYPE=ja_JP.UTF-8 \
+    # && fc-cache -fv \
     # イメージサイズを削減するために一時パッケージファイルをクリーンアップ
     && rm -rf /var/lib/apt/lists/*
 

@@ -15,20 +15,20 @@ def get_openai_client(provider):
     if provider == "DeepSeek":
         api_key = os.getenv("DEEPSEEK_API_KEY")
         base_url = "https://api.deepseek.com/v1"
-        prompt_title = "DeepSeek API Key入力"
-        prompt_label = "DeepSeek API Keyを入力してください:"
+        prompt_title = "Input DeepSeek API Key"
+        prompt_label = "Please Input Your DeepSeek API Key.:"
     else:
         api_key = os.getenv("OPENAI_API_KEY")
         base_url = "https://api.openai.com/v1"
-        prompt_title = "OpenAI API Key入力"
-        prompt_label = "OpenAI API Keyを入力してください:"
+        prompt_title = "Input OpenAI API Key"
+        prompt_label = "Please Input Your OpenAI API Key:"
 
     if not api_key:
         key, ok = QtWidgets.QInputDialog.getText(
             None, prompt_title, prompt_label, QtWidgets.QLineEdit.Password
         )
         if not ok or not key.strip():
-            QtWidgets.QMessageBox.critical(None, "エラー", "APIキーが設定されていません。アプリを終了します。")
+            QtWidgets.QMessageBox.critical(None, "Error", "API key is not set. Exiting application.")
             sys.exit(1)
         api_key = key.strip()
 
@@ -39,7 +39,7 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         provider, ok = QtWidgets.QInputDialog.getItem(
-            None, "サービス選択", "使用するサービスを選択してください:",
+            None, "Select Service", "Please select the service to use:",
             ["DeepSeek", "ChatGPT"], 0, False
         )
         if not ok:
