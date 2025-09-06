@@ -6,18 +6,21 @@
 base ❯ conda activate py3.11
 py3.11 ❯ cd /Users/mo/Projects/FreeCAD_with_LLM/FreeCAD_API
 py3.11 ❯ export PYTHONPATH=/Applications/FreeCAD.app/Contents/Resources/lib:${PYTHONPATH}
+py3.11 ❯ export OPEN_API_KEY="xxxx"
 py3.11 ❯ export DEEPSEEK_API_KEY="xxxx"
 ```
 
 ## Environment
 
+#### Create v-env
+
 ```bash
 conda create -n py3.11 python=3.11
 ```
 
-FreeCADは3.11で動作（3.12だとうまく動かない）
+＊FreeCADは3.11で動作（3.12だとうまく動かない）
 
-## Libralies
+#### Libralies
 
 ```bash
 conda install conda-forge::pyside2
@@ -25,7 +28,7 @@ conda install conda-forge::openai
 conda install conda-forge::pivy
 ```
 
-## python Path
+#### Python Path
 
 FreeCAD の Python モジュールが入ったディレクトリをPYTHONPATH に追加
 
@@ -41,15 +44,15 @@ export PYTHONPATH=/Applications/FreeCAD.app/Contents/Resources/lib:${PYTHONPATH}
 C:\Program Files\FreeCAD XX\bin
 ```
 
-## AddonManager を無効化
+#### AddonManager を無効化
 
 ```text
 /applications/FreeCAD.app/Contents/Resources/Mod/AddonManager
 ```
 
-デスクトップなどの別フォルダにドラッグして退避
+上記ディレクトリをデスクトップなどの別フォルダにドラッグして退避
 
-## APIキーを環境変数に設定
+#### APIキーを環境変数に設定
 
 conda環境であればconda環境内で設定する
 
@@ -114,4 +117,16 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-model に "deepseek-chat"（V3）（会話向き）か "deepseek-reasoner"（R1）（推論・コーディング向き）を指定する。`stream=True` とするとリアルタイム出力を受け取れる。
+
+---
+
+#### REFERENCES
+
+- model に "deepseek-chat"（V3）（会話向き）か "deepseek-reasoner"（R1）（推論・コーディング向き）を指定する。`stream=True` とするとリアルタイム出力を受け取れる。
+
+- Model Princing
+  - OpenAI
+https://platform.openai.com/docs/pricing
+
+  - DeepSeek
+https://api-docs.deepseek.com/quick_start/pricing
