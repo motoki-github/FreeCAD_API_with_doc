@@ -5,7 +5,7 @@ import sys
 import os
 import re
 from openai import OpenAI
-from PySide6 import QtWidgets, QtCore
+from PySide2 import QtWidgets, QtCore
 import FreeCAD as App
 import FreeCADGui as Gui
 
@@ -38,14 +38,30 @@ def get_openai_client(provider):
 class FreeCADEmbedApp(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        provider, ok = QtWidgets.QInputDialog.getItem(
-            None, "Select Service", "Please select the service to use:",
-            ["DeepSeek", "ChatGPT"], 0, False
+        # Provider + Model を一括選択
+        combos = [
+            ("ChatGPT", "gpt-5"),
+            ("ChatGPT", "gpt-5-mini"),
+            ("ChatGPT", "gpt-5-nano"),
+            ("ChatGPT", "gpt-4o"),
+            ("ChatGPT", "gpt-4o-mini"),
+            ("DeepSeek", "deepseek-chat"),
+            ("DeepSeek", "deepseek-reasoner"),
+        ]
+        combo_items = [f"{p} : {m}" for p, m in combos]
+        choice, ok = QtWidgets.QInputDialog.getItem(
+            None,
+            "Select Provider + Model",
+            "Please select the provider and model:",
+            combo_items,
+            0,
+            False,
         )
-        if not ok:
+        if not ok or not choice:
             sys.exit(0)
-        self.provider = provider
-        self.model_name = "deepseek-reasoner" if provider == "DeepSeek" else "gpt-4o-mini"
+        provider_part, model_part = [s.strip() for s in choice.split(":", 1)]
+        self.provider = provider_part
+        self.model_name = model_part
         self.client = get_openai_client(self.provider)
 
         system_msg = (
@@ -58,7 +74,7 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
         )
         self.messages = [{"role": "system", "content": system_msg}]
 
-        self.setWindowTitle(f"FreeCAD Embedded App ({self.provider})")
+        self.setWindowTitle(f"FreeCAD Embedded App ({self.provider} - {self.model_name})")
         self.resize(1400, 800)
 
         # エラーリトライカウンタ
@@ -109,11 +125,30 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
         fc_widget = Gui.getMainWindow()
         h_layout.addWidget(fc_widget, 3)
 
+        # 不要パネルを非表示
+        self._hide_freecad_panels()
+
         # シグナル
         self.query_btn.clicked.connect(self.on_query)
         self.model_btn.clicked.connect(self.on_generate)
 
         QtWidgets.QApplication.instance().aboutToQuit.connect(self._cleanup_freecad)
+
+    def _hide_freecad_panels(self):
+        mw = Gui.getMainWindow()
+        if not mw:
+            return
+        targets = [
+            "Model",        # Model/Tasksを含む
+            "Python console",
+            "Report view",
+            "Tasks",
+        ]
+        for dock in mw.findChildren(QtWidgets.QDockWidget):
+            title = dock.windowTitle()
+            name = dock.objectName()
+            if any(t.lower() == title.lower() or t.lower() in title.lower() or t.lower() == name.lower() for t in targets):
+                dock.hide()
 
     def on_query(self):
         prompt = self.query_edit.toPlainText().strip()
