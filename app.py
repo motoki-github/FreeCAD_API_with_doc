@@ -6,85 +6,29 @@ import os
 import re
 import base64
 import mimetypes
-from openai import OpenAI
+import json
+from pathlib import Path
+from typing import List, Dict, Any, Tuple
 from PySide2 import QtWidgets, QtCore
 from PySide2.QtGui import QPixmap
 import FreeCAD as App
 import FreeCADGui as Gui
-
-# OpenAI/DeepSeekクライアント取得関数
-# provider: 'DeepSeek' または 'ChatGPT'
-def get_openai_client(provider):
-    if provider == "DeepSeek":
-        api_key = os.getenv("DEEPSEEK_API_KEY")
-        base_url = "https://api.deepseek.com/v1"
-        prompt_title = "Input DeepSeek API Key"
-        prompt_label = "Please Input Your DeepSeek API Key.:"
-    else:
-        api_key = os.getenv("OPENAI_API_KEY")
-        base_url = "https://api.openai.com/v1"
-        prompt_title = "Input OpenAI API Key"
-        prompt_label = "Please Input Your OpenAI API Key:"
-
-    if not api_key:
-        key, ok = QtWidgets.QInputDialog.getText(
-            None, prompt_title, prompt_label, QtWidgets.QLineEdit.Password
-        )
-        if not ok or not key.strip():
-            QtWidgets.QMessageBox.critical(None, "Error", "API key is not set. Exiting application.")
-            sys.exit(1)
-        api_key = key.strip()
-
-    # OpenAIクライアントにbase_urlを正しく渡す
-    return OpenAI(api_key=api_key, base_url=base_url)
-
-class ProviderModelDialog(QtWidgets.QDialog):
-    def __init__(self, combos, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Select Provider + Model")
-        self.setModal(True)
-
-        layout = QtWidgets.QVBoxLayout(self)
-        self.list = QtWidgets.QListWidget(self)
-        for p, m in combos:
-            self.list.addItem(f"{p} : {m}")
-        self.list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
-        self.list.setCurrentRow(0)
-        self.list.itemDoubleClicked.connect(self.accept)
-        layout.addWidget(self.list)
-
-        btns = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel,
-            QtCore.Qt.Horizontal,
-            self,
-        )
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
-
-    def selected(self):
-        item = self.list.currentItem()
-        if not item:
-            return None, None
-        text = item.text()
-        provider_part, model_part = [s.strip() for s in text.split(":", 1)]
-        return provider_part, model_part
+from config_loader import CONFIG
+from llm_client import get_openai_client
+from dialogs import ProviderModelDialog
+from rag_helper import RagHelper
+from image_utils import image_file_to_data_url
 
 
 class FreeCADEmbedApp(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         # Provider + Model を一括選択（一覧から選択）
-        combos = [
-            ("ChatGPT", "gpt-5"),
-            ("ChatGPT", "gpt-5-mini"),
-            ("ChatGPT", "gpt-5-nano"),
-            ("ChatGPT", "gpt-4o"),
-            ("ChatGPT", "gpt-4o-mini"),
-            ("DeepSeek", "deepseek-chat"),
-            ("DeepSeek", "deepseek-reasoner"),
-        ]
-        dlg = ProviderModelDialog(combos, self)
+        model_catalog = CONFIG.get("model_catalog", {})
+        combos = [(prov, model) for prov, models in model_catalog.items() for model in models]
+        defaults = CONFIG.get("provider_defaults", {})
+        default_text = f"{defaults.get('provider','ChatGPT')} : {defaults.get('model','gpt-4o-mini')}"
+        dlg = ProviderModelDialog(combos, self, default_text=default_text)
         if dlg.exec_() != QtWidgets.QDialog.Accepted:
             sys.exit(0)
         provider_part, model_part = dlg.selected()
@@ -92,23 +36,44 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
             sys.exit(0)
         self.provider = provider_part
         self.model_name = model_part
-        self.client = get_openai_client(self.provider)
+        self.client = get_openai_client(self.provider, CONFIG)
 
-        system_msg = (
-            "あなたは FreeCAD+PySide2 アプリのエキスパートです。"
-            "・出力は必ず コードの説明　からはじまり、その後　python のコードブロックで終わること"
-            "・関数シグネチャは def create(doc): のみ"
-            "・実行前に既存オブジェクトをすべて削除する処理を組み込む"
-            "・PEP8 準拠、余計な説明テキストは一切含めない"
-            "・最後に return doc を追加すること"
-        )
+        # system prompt from file or defaults
+        sys_msg_path = CONFIG.get("system_prompt_path")
+        system_msg = None
+        if sys_msg_path:
+            try:
+                p = Path(__file__).resolve().parent / sys_msg_path if not Path(sys_msg_path).is_absolute() else Path(sys_msg_path)
+                if p.exists():
+                    system_msg = p.read_text(encoding="utf-8").strip()
+            except Exception as e:
+                print(f"[Config] Failed to read system prompt: {e}")
+        if not system_msg:
+            system_msg = (
+                "あなたは FreeCAD+PySide2 アプリのエキスパートです。"
+                "・出力は必ず コードの説明　からはじまり、その後　python のコードブロックで終わること"
+                "・関数シグネチャは def create(doc): のみ"
+                "・実行前に既存オブジェクトをすべて削除する処理を組み込む"
+                "・PEP8 準拠、余計な説明テキストは一切含めない"
+                "・最後に return doc を追加すること"
+            )
         self.messages = [{"role": "system", "content": system_msg}]
 
         self.setWindowTitle(f"FreeCAD Embedded App ({self.provider} - {self.model_name})")
-        self.resize(1400, 800)
+        ws = CONFIG.get("window_size", {"width": 1400, "height": 800})
+        self.resize(int(ws.get("width", 1400)), int(ws.get("height", 800)))
 
         # エラーリトライカウンタ
         self.error_count = 0
+        self.retry_enabled = bool(CONFIG.get("retry", {}).get("enabled", True))
+        self.retry_max_attempts = int(CONFIG.get("retry", {}).get("max_attempts", 3))
+
+        # RAG helper + view settings
+        self.rag = RagHelper(CONFIG)
+        self.rag_top_k = self.rag.top_k
+        self.rag_assistant_preamble = self.rag.assistant_preamble
+        self.view_isometric = bool(CONFIG.get("view", {}).get("isometric", True))
+        self.view_fit_all = bool(CONFIG.get("view", {}).get("fit_all", True))
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -154,14 +119,26 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
         center_layout = QtWidgets.QVBoxLayout(center)
         center_layout.setContentsMargins(0,0,0,0)
         self.code_edit = QtWidgets.QPlainTextEdit()
-        self.code_edit.setPlainText(
-            "# FreeCAD 用 Python コード\n"
-            "def create(doc):\n"
-            "    box = doc.addObject('Part::Box','Box')\n"
-            "    box.Length = 10\n"
-            "    box.Width = 20\n"
-            "    box.Height = 30\n"
-        )
+        # 初期コードテンプレート
+        tmpl_path = CONFIG.get("initial_code_template_path")
+        code_tmpl = None
+        if tmpl_path:
+            tp = Path(__file__).resolve().parent / tmpl_path if not Path(tmpl_path).is_absolute() else Path(tmpl_path)
+            if tp.exists():
+                try:
+                    code_tmpl = tp.read_text(encoding="utf-8")
+                except Exception as e:
+                    print(f"[Config] Failed to read template: {e}")
+        if not code_tmpl:
+            code_tmpl = (
+                "# FreeCAD 用 Python コード\n"
+                "def create(doc):\n"
+                "    box = doc.addObject('Part::Box','Box')\n"
+                "    box.Length = 10\n"
+                "    box.Width = 20\n"
+                "    box.Height = 30\n"
+            )
+        self.code_edit.setPlainText(code_tmpl)
         center_layout.addWidget(self.code_edit)
         self.model_btn = QtWidgets.QPushButton("モデル生成")
         center_layout.addWidget(self.model_btn)
@@ -169,7 +146,7 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
 
         # 右ペイン: FreeCADビュー
         Gui.showMainWindow()
-        self.doc = App.newDocument("EmbeddedDoc")
+        self.doc = App.newDocument(CONFIG.get("freecad_doc_name", "EmbeddedDoc"))
         fc_widget = Gui.getMainWindow()
         h_layout.addWidget(fc_widget, 3)
 
@@ -185,16 +162,18 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
 
         QtWidgets.QApplication.instance().aboutToQuit.connect(self._cleanup_freecad)
 
+    # RAG 関連は rag_helper に分離
+
     def _hide_freecad_panels(self):
         mw = Gui.getMainWindow()
         if not mw:
             return
-        targets = [
+        targets = CONFIG.get("hidden_panels", [
             "Model",        # Model/Tasksを含む
             "Python console",
             "Report view",
             "Tasks",
-        ]
+        ])
         for dock in mw.findChildren(QtWidgets.QDockWidget):
             title = dock.windowTitle()
             name = dock.objectName()
@@ -206,6 +185,9 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
         if not prompt:
             return
         print(f"[Query] {prompt}")
+        # RAG 検索（可能なら）
+        rag_hits = self.rag.search(prompt, top_k=self.rag_top_k)
+        rag_ctx = RagHelper.format_context(rag_hits)
         # 画像を含めたユーザーメッセージを構築
         image_paths = []
         for i in range(self.image_list.count()):
@@ -219,7 +201,7 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
             content_parts = [{"type": "text", "text": prompt}]
             for p in image_paths:
                 try:
-                    data_url = self._image_file_to_data_url(p)
+                    data_url = image_file_to_data_url(p)
                     content_parts.append({
                         "type": "image_url",
                         "image_url": {"url": data_url}
@@ -235,6 +217,14 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
                     "現在のプロバイダ/モデルでは画像入力に未対応のため、テキストのみ送信します。"
                 )
             user_msg = {"role": "user", "content": prompt}
+
+        # RAG コンテキストを先頭に差し込む（あれば）
+        if rag_ctx:
+            preamble = getattr(self, 'rag_assistant_preamble', '')
+            preamble = preamble.strip() if isinstance(preamble, str) else ''
+            assist_ctx = f"{preamble}\n\n{rag_ctx}" if preamble else rag_ctx
+            # 直前に system 情報として加えるより、assistantの補助発話として添付
+            self.messages.append({"role": "assistant", "content": assist_ctx})
 
         self.messages.append(user_msg)
         try:
@@ -265,8 +255,11 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
             # 成功時はエラーカウントリセット
             self.error_count = 0
         except Exception as e:
+            if not getattr(self, 'retry_enabled', True):
+                raise
             self.error_count += 1
-            if self.error_count < 3:
+            limit = getattr(self, 'retry_max_attempts', 3)
+            if self.error_count < limit:
                 # エラー発生を問い合わせ
                 err_msg = f"モデル生成中にエラーが発生しました: {type(e).__name__}: {e}"
                 print(f"[Error] {err_msg}")
@@ -284,30 +277,21 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
             else:
                 # 3回失敗時は通知
                 QtWidgets.QMessageBox.information(
-                    self, "連続エラー", "モデル生成が3回連続で失敗しました。手動でご確認ください。"
+                    self, "連続エラー", f"モデル生成が{limit}回連続で失敗しました。手動でご確認ください。"
                 )
 
     def _model_supports_vision(self, provider, model):
-        # 代表的な視覚モデルのみ許可
-        if provider == "ChatGPT" and model in {"gpt-4o", "gpt-4o-mini"}:
-            return True
-        return False
+        supported = set(CONFIG.get("vision", {}).get("supported_models", ["gpt-4o", "gpt-4o-mini"]))
+        return bool(provider == "ChatGPT" and model in supported)
 
-    def _image_file_to_data_url(self, path):
-        mt, _ = mimetypes.guess_type(path)
-        if not mt or not mt.startswith("image/"):
-            # 既知拡張子でなければPNGとして送る
-            mt = "image/png"
-        with open(path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("ascii")
-        return f"data:{mt};base64,{b64}"
+    # 画像のDataURL変換は image_utils.image_file_to_data_url を使用
 
     def on_add_image(self):
         files, _ = QtWidgets.QFileDialog.getOpenFileNames(
             self,
             "画像ファイルを選択",
             "",
-            "画像ファイル (*.png *.jpg *.jpeg *.gif *.webp *.bmp);;すべてのファイル (*)",
+            CONFIG.get("images", {}).get("file_filter", "画像ファイル (*.png *.jpg *.jpeg *.gif *.webp *.bmp);;すべてのファイル (*)"),
         )
         if not files:
             return
@@ -375,7 +359,10 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
         fn(self.doc)
         self.doc.recompute()
         v = Gui.ActiveDocument.ActiveView
-        v.viewIsometric(); v.fitAll()
+        if getattr(self, 'view_isometric', True):
+            v.viewIsometric()
+        if getattr(self, 'view_fit_all', True):
+            v.fitAll()
 
     def on_generate(self):
         code = self.code_edit.toPlainText()

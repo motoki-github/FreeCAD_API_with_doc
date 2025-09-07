@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sys
+import os
+import re
+import base64
+import mimetypes
+from openai import OpenAI
+from PySide2 import QtWidgets, QtCore
+from PySide2.QtGui import QPixmap
+import FreeCAD as App
+import FreeCADGui as Gui
+
+# OpenAI/DeepSeekクライアント取得関数
+# provider: 'DeepSeek' または 'ChatGPT'
+def get_openai_client(provider):
+    if provider == "DeepSeek":
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+        base_url = "https://api.deepseek.com/v1"
+        prompt_title = "Input DeepSeek API Key"
+        prompt_label = "Please Input Your DeepSeek API Key.:"
+    else:
+        api_key = os.getenv("OPENAI_API_KEY")
+        base_url = "https://api.openai.com/v1"
+        prompt_title = "Input OpenAI API Key"
+        prompt_label = "Please Input Your OpenAI API Key:"
+
+    if not api_key:
+        key, ok = QtWidgets.QInputDialog.getText(
+            None, prompt_title, prompt_label, QtWidgets.QLineEdit.Password
+        )
+        if not ok or not key.strip():
+            QtWidgets.QMessageBox.critical(None, "Error", "API key is not set. Exiting application.")
+            sys.exit(1)
+        api_key = key.strip()
+
+    # OpenAIクライアントにbase_urlを正しく渡す
+    return OpenAI(api_key=api_key, base_url=base_url)
+
+class ProviderModelDialog(QtWidgets.QDialog):
+    def __init__(self, combos, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Provider + Model")
+        self.setModal(True)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        self.list = QtWidgets.QListWidget(self)
+        for p, m in combos:
+            self.list.addItem(f"{p} : {m}")
+        self.list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.list.setCurrentRow(0)
+        self.list.itemDoubleClicked.connect(self.accept)
+        layout.addWidget(self.list)
+
+        btns = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel,
+            QtCore.Qt.Horizontal,
+            self,
+        )
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def selected(self):
+        item = self.list.currentItem()
+        if not item:
+            return None, None
+        text = item.text()
+        provider_part, model_part = [s.strip() for s in text.split(":", 1)]
+        return provider_part, model_part
+
+
+class FreeCADEmbedApp(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+        # Provider + Model を一括選択（一覧から選択）
+        combos = [
+            ("ChatGPT", "gpt-5"),
+            ("ChatGPT", "gpt-5-mini"),
+            ("ChatGPT", "gpt-5-nano"),
+            ("ChatGPT", "gpt-4o"),
+            ("ChatGPT", "gpt-4o-mini"),
+            ("DeepSeek", "deepseek-chat"),
+            ("DeepSeek", "deepseek-reasoner"),
+        ]
+        dlg = ProviderModelDialog(combos, self)
+        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+            sys.exit(0)
+        provider_part, model_part = dlg.selected()
+        if not provider_part or not model_part:
+            sys.exit(0)
+        self.provider = provider_part
+        self.model_name = model_part
+        self.client = get_openai_client(self.provider)
+
+        system_msg = (
+            "あなたは FreeCAD+PySide2 アプリのエキスパートです。"
+            "・出力は必ず コードの説明　からはじまり、その後　python のコードブロックで終わること"
+            "・関数シグネチャは def create(doc): のみ"
+            "・実行前に既存オブジェクトをすべて削除する処理を組み込む"
+            "・PEP8 準拠、余計な説明テキストは一切含めない"
+            "・最後に return doc を追加すること"
+        )
+        self.messages = [{"role": "system", "content": system_msg}]
+
+        self.setWindowTitle(f"FreeCAD Embedded App ({self.provider} - {self.model_name})")
+        self.resize(1400, 800)
+
+        # エラーリトライカウンタ
+        self.error_count = 0
+
+        central = QtWidgets.QWidget()
+        self.setCentralWidget(central)
+        h_layout = QtWidgets.QHBoxLayout(central)
+        h_layout.setContentsMargins(5,5,5,5)
+        h_layout.setSpacing(5)
+
+        # 左ペイン: 問い合わせ
+        left = QtWidgets.QWidget()
+        left_layout = QtWidgets.QVBoxLayout(left)
+        left_layout.setContentsMargins(0,0,0,0)
+        left_layout.setSpacing(5)
+        self.query_edit = QtWidgets.QPlainTextEdit()
+        self.query_edit.setPlaceholderText("問い合わせ内容を入力してください...")
+        left_layout.addWidget(self.query_edit, 1)
+        self.query_btn = QtWidgets.QPushButton("問い合わせ")
+        left_layout.addWidget(self.query_btn)
+        # 画像入力UI
+        img_controls = QtWidgets.QHBoxLayout()
+        self.add_image_btn = QtWidgets.QPushButton("画像を追加")
+        self.remove_image_btn = QtWidgets.QPushButton("選択画像を削除")
+        img_controls.addWidget(self.add_image_btn)
+        img_controls.addWidget(self.remove_image_btn)
+        left_layout.addLayout(img_controls)
+        self.image_list = QtWidgets.QListWidget()
+        self.image_list.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.image_list.setFixedHeight(100)
+        left_layout.addWidget(self.image_list)
+        # 画像プレビュー
+        self.image_preview = QtWidgets.QLabel()
+        self.image_preview.setMinimumHeight(160)
+        self.image_preview.setAlignment(QtCore.Qt.AlignCenter)
+        self.image_preview.setStyleSheet("QLabel { border: 1px solid #aaa; background: #fafafa; }")
+        self.image_preview.setText("画像プレビューなし")
+        left_layout.addWidget(self.image_preview)
+        self.response_edit = QtWidgets.QPlainTextEdit()
+        self.response_edit.setReadOnly(True)
+        left_layout.addWidget(self.response_edit, 1)
+        h_layout.addWidget(left, 1)
+
+        # 中央ペイン: コード
+        center = QtWidgets.QWidget()
+        center_layout = QtWidgets.QVBoxLayout(center)
+        center_layout.setContentsMargins(0,0,0,0)
+        self.code_edit = QtWidgets.QPlainTextEdit()
+        self.code_edit.setPlainText(
+            "# FreeCAD 用 Python コード\n"
+            "def create(doc):\n"
+            "    box = doc.addObject('Part::Box','Box')\n"
+            "    box.Length = 10\n"
+            "    box.Width = 20\n"
+            "    box.Height = 30\n"
+        )
+        center_layout.addWidget(self.code_edit)
+        self.model_btn = QtWidgets.QPushButton("モデル生成")
+        center_layout.addWidget(self.model_btn)
+        h_layout.addWidget(center, 2)
+
+        # 右ペイン: FreeCADビュー
+        Gui.showMainWindow()
+        self.doc = App.newDocument("EmbeddedDoc")
+        fc_widget = Gui.getMainWindow()
+        h_layout.addWidget(fc_widget, 3)
+
+        # 不要パネルを非表示
+        self._hide_freecad_panels()
+
+        # シグナル
+        self.query_btn.clicked.connect(self.on_query)
+        self.model_btn.clicked.connect(self.on_generate)
+        self.add_image_btn.clicked.connect(self.on_add_image)
+        self.remove_image_btn.clicked.connect(self.on_remove_image)
+        self.image_list.itemSelectionChanged.connect(self.on_image_selection_changed)
+
+        QtWidgets.QApplication.instance().aboutToQuit.connect(self._cleanup_freecad)
+
+    def _hide_freecad_panels(self):
+        mw = Gui.getMainWindow()
+        if not mw:
+            return
+        targets = [
+            "Model",        # Model/Tasksを含む
+            "Python console",
+            "Report view",
+            "Tasks",
+        ]
+        for dock in mw.findChildren(QtWidgets.QDockWidget):
+            title = dock.windowTitle()
+            name = dock.objectName()
+            if any(t.lower() == title.lower() or t.lower() in title.lower() or t.lower() == name.lower() for t in targets):
+                dock.hide()
+
+    def on_query(self):
+        prompt = self.query_edit.toPlainText().strip()
+        if not prompt:
+            return
+        print(f"[Query] {prompt}")
+        # 画像を含めたユーザーメッセージを構築
+        image_paths = []
+        for i in range(self.image_list.count()):
+            item = self.image_list.item(i)
+            path = item.data(QtCore.Qt.UserRole)
+            if path:
+                image_paths.append(path)
+
+        user_msg = None
+        if image_paths and self._model_supports_vision(self.provider, self.model_name):
+            content_parts = [{"type": "text", "text": prompt}]
+            for p in image_paths:
+                try:
+                    data_url = self._image_file_to_data_url(p)
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": data_url}
+                    })
+                except Exception as ie:
+                    print(f"[ImageSkip] {p}: {ie}")
+            user_msg = {"role": "user", "content": content_parts}
+        else:
+            if image_paths:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "画像は無視されます",
+                    "現在のプロバイダ/モデルでは画像入力に未対応のため、テキストのみ送信します。"
+                )
+            user_msg = {"role": "user", "content": prompt}
+
+        self.messages.append(user_msg)
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.model_name, messages=self.messages
+            )
+            text = resp.choices[0].message.content.strip()
+            print(f"[Response] {text}")
+            self.messages.append({"role": "assistant", "content": text})
+            self.response_edit.setPlainText(text)
+
+            # コード転送＆生成試行
+            code = self.extract_code(text)
+            self.code_edit.setPlainText(code)
+            self.error_count = 0
+            self.perform_generate_with_retry(code)
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "エラー", f"{type(e).__name__}: {e}")
+
+    def extract_code(self, text):
+        matches = re.findall(r"```(?:python)?\n(.*?)```", text, re.S)
+        return "\n".join(matches) if matches else text
+
+    def perform_generate_with_retry(self, code):
+        try:
+            self._generate_model(code)
+            # 成功時はエラーカウントリセット
+            self.error_count = 0
+        except Exception as e:
+            self.error_count += 1
+            if self.error_count < 3:
+                # エラー発生を問い合わせ
+                err_msg = f"モデル生成中にエラーが発生しました: {type(e).__name__}: {e}"
+                print(f"[Error] {err_msg}")
+                self.messages.append({"role": "user", "content": err_msg})
+                resp = self.client.chat.completions.create(
+                    model=self.model_name, messages=self.messages
+                )
+                fix_code = resp.choices[0].message.content.strip()
+                print(f"[FixCode] {fix_code}")
+                self.messages.append({"role": "assistant", "content": fix_code})
+                # 修正コードを再試行
+                code_to_try = self.extract_code(fix_code)
+                self.code_edit.setPlainText(code_to_try)
+                self.perform_generate_with_retry(code_to_try)
+            else:
+                # 3回失敗時は通知
+                QtWidgets.QMessageBox.information(
+                    self, "連続エラー", "モデル生成が3回連続で失敗しました。手動でご確認ください。"
+                )
+
+    def _model_supports_vision(self, provider, model):
+        # 代表的な視覚モデルのみ許可
+        if provider == "ChatGPT" and model in {"gpt-4o", "gpt-4o-mini"}:
+            return True
+        return False
+
+    def _image_file_to_data_url(self, path):
+        mt, _ = mimetypes.guess_type(path)
+        if not mt or not mt.startswith("image/"):
+            # 既知拡張子でなければPNGとして送る
+            mt = "image/png"
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return f"data:{mt};base64,{b64}"
+
+    def on_add_image(self):
+        files, _ = QtWidgets.QFileDialog.getOpenFileNames(
+            self,
+            "画像ファイルを選択",
+            "",
+            "画像ファイル (*.png *.jpg *.jpeg *.gif *.webp *.bmp);;すべてのファイル (*)",
+        )
+        if not files:
+            return
+        # 重複を避けて追加
+        existing = set()
+        for i in range(self.image_list.count()):
+            p = self.image_list.item(i).data(QtCore.Qt.UserRole)
+            if p:
+                existing.add(p)
+        for path in files:
+            if path in existing:
+                continue
+            item = QtWidgets.QListWidgetItem(os.path.basename(path))
+            item.setToolTip(path)
+            item.setData(QtCore.Qt.UserRole, path)
+            self.image_list.addItem(item)
+        # 初回追加時など、選択がなければ先頭を選択
+        if self.image_list.selectedItems() == [] and self.image_list.count() > 0:
+            self.image_list.setCurrentRow(0)
+        self._update_image_preview()
+
+    def on_remove_image(self):
+        for item in list(self.image_list.selectedItems()):
+            self.image_list.takeItem(self.image_list.row(item))
+        # 選択の調整とプレビュー更新
+        if self.image_list.count() > 0 and not self.image_list.selectedItems():
+            self.image_list.setCurrentRow(0)
+        self._update_image_preview()
+
+    def on_image_selection_changed(self):
+        self._update_image_preview()
+
+    def _update_image_preview(self):
+        # 先頭の選択アイテムをプレビュー
+        sel = self.image_list.selectedItems()
+        path = None
+        if sel:
+            path = sel[0].data(QtCore.Qt.UserRole)
+        if not path:
+            self.image_preview.setText("画像プレビューなし")
+            self.image_preview.setPixmap(QPixmap())
+            return
+        pm = QPixmap(path)
+        if pm.isNull():
+            self.image_preview.setText("画像を読み込めません")
+            self.image_preview.setPixmap(QPixmap())
+            return
+        # ラベルに収まるようにスケーリング
+        target_size = self.image_preview.size() - QtCore.QSize(6, 6)
+        if target_size.width() <= 0 or target_size.height() <= 0:
+            self.image_preview.setPixmap(pm)
+        else:
+            spm = pm.scaled(target_size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+            self.image_preview.setPixmap(spm)
+
+    def _generate_model(self, code):
+        # FreeCADオブジェクトクリア
+        for obj in list(self.doc.Objects):
+            self.doc.removeObject(obj.Name)
+        namespace = {"App":App, "Gui":Gui, "doc":self.doc}
+        exec(code, namespace)
+        fn = namespace.get("create")
+        if not callable(fn):
+            raise RuntimeError("create(doc) が定義されていません")
+        fn(self.doc)
+        self.doc.recompute()
+        v = Gui.ActiveDocument.ActiveView
+        v.viewIsometric(); v.fitAll()
+
+    def on_generate(self):
+        code = self.code_edit.toPlainText()
+        self.error_count = 0
+        try:
+            self.perform_generate_with_retry(code)
+        except Exception as e:
+            # ここは通常通らない
+            QtWidgets.QMessageBox.critical(self, "致命的エラー", str(e))
+
+    def _cleanup_freecad(self):
+        try: App.closeDocument(self.doc.Name)
+        except: pass
+        try: Gui.getMainWindow().close()
+        except: pass
+
+    def closeEvent(self, event):
+        self._cleanup_freecad()
+        super().closeEvent(event)
+
+if __name__ == "__main__":
+    app = QtWidgets.QApplication(sys.argv)
+    win = FreeCADEmbedApp()
+    win.show()
+    sys.exit(app.exec_())

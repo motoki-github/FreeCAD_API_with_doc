@@ -1,0 +1,31 @@
+{
+  "provider_defaults": { "provider": "ChatGPT", "model": "gpt-4o-mini" },
+  "api_base_urls": {
+    "ChatGPT": "https://api.openai.com/v1",
+    "DeepSeek": "https://api.deepseek.com/v1"
+  },
+  "model_catalog": {
+    "ChatGPT": ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4o", "gpt-4o-mini"],
+    "DeepSeek": ["deepseek-chat", "deepseek-reasoner"]
+  },
+  "system_prompt_path": "system_msg.md",
+  "window_size": { "width": 1400, "height": 800 },
+  "freecad_doc_name": "EmbeddedDoc",
+  "hidden_panels": ["Model", "Python console", "Report view", "Tasks"],
+  "initial_code_template_path": null,
+  "retry": { "enabled": true, "max_attempts": 3 },
+  "vision": { "supported_models": ["gpt-4o", "gpt-4o-mini"] },
+  "images": { "file_filter": "画像ファイル (*.png *.jpg *.jpeg *.gif *.webp *.bmp);;すべてのファイル (*)" },
+  "rag": {
+    "kb_base_path": "Knowledge_Base/kb_out",
+    "top_k": 6,
+    "embed_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "assistant_preamble": "以下はFreeCADに関する参考資料の抜粋です。必要なAPI/用法を優先的に参照して正確なコードを作成してください。必ず参照元の意図に従い、不明点は仮定せず安全なデフォルトを選んでください。",
+    "keyword_fallback": { "min_token_len": 3 },
+    "sources": { "internal": true, "external": true }
+  },
+  "view": { "isometric": true, "fit_all": true },
+  "logging": { "level": "INFO" },
+  "secrets": { "env_keys": { "ChatGPT": "OPENAI_API_KEY", "DeepSeek": "DEEPSEEK_API_KEY" } }
+}
+

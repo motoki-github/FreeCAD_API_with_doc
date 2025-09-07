@@ -1,5 +1,7 @@
 # How to Use
 
+---
+
 ## Run
 
 ```bash
@@ -10,9 +12,11 @@ py3.11 ❯ export OPEN_API_KEY="xxxx"
 py3.11 ❯ export DEEPSEEK_API_KEY="xxxx"
 ```
 
+---
+
 ## Environment
 
-#### Create v-env
+### Create v-env
 
 ```bash
 conda create -n py3.11 python=3.11
@@ -20,7 +24,7 @@ conda create -n py3.11 python=3.11
 
 ＊FreeCADは3.11で動作（3.12だとうまく動かない）
 
-#### Libralies
+### Libralies
 
 ```bash
 conda install conda-forge::pyside2
@@ -28,7 +32,7 @@ conda install conda-forge::openai
 conda install conda-forge::pivy
 ```
 
-#### Python Path
+### Python Path
 
 FreeCAD の Python モジュールが入ったディレクトリをPYTHONPATH に追加
 
@@ -44,7 +48,7 @@ export PYTHONPATH=/Applications/FreeCAD.app/Contents/Resources/lib:${PYTHONPATH}
 C:\Program Files\FreeCAD XX\bin
 ```
 
-#### AddonManager を無効化
+### AddonManager を無効化
 
 ```text
 /applications/FreeCAD.app/Contents/Resources/Mod/AddonManager
@@ -52,7 +56,7 @@ C:\Program Files\FreeCAD XX\bin
 
 上記ディレクトリをデスクトップなどの別フォルダにドラッグして退避
 
-#### APIキーを環境変数に設定
+### APIキーを環境変数に設定
 
 conda環境であればconda環境内で設定する
 
@@ -77,11 +81,9 @@ unset DEEPSEEK_API_KEY
 
 ---
 
-### test.py
+### コードの解説
 
-pythonコードでFreeCADを呼び出し起動、ドキュメント生成などを実行。モデル生成コードはgeometry.pyに格納し、呼び出し。
-
-### app.py
+#### app.py
 
 pythonコードでアプリを起動。テキスト入力欄にFreeCAD用のモデル生成コードを入力（ジオメトリ部分のみでO.K.）。右側にFreeCAD_GUIを埋め込み表示。
 
@@ -94,6 +96,7 @@ pythonコードでアプリを起動。テキスト入力欄にFreeCAD用のモ�
 ### OpenAI SDK を使った DeepSeek API の呼び出し例
 
 DeepSeek は OpenAI 互換のエンドポイントを持つので、openai ライブラリをそのまま流用できる。
+
 ```python
 from openai import OpenAI
 
@@ -117,16 +120,15 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-
 ---
 
-#### REFERENCES
+## REFERENCES
 
 - model に "deepseek-chat"（V3）（会話向き）か "deepseek-reasoner"（R1）（推論・コーディング向き）を指定する。`stream=True` とするとリアルタイム出力を受け取れる。
 
 - Model Princing
-  - OpenAI
-https://platform.openai.com/docs/pricing
+  - [OpenAI Model Pricing](https://platform.openai.com/docs/pricing)
+  - [DeepSeek Modek Pricing](https://api-docs.deepseek.com/quick_start/pricing)
 
-  - DeepSeek
-https://api-docs.deepseek.com/quick_start/pricing
+- FreeCAD Docs
+  - [FreeCAD Part Workbech](https://wiki.freecad.org/Part_Workbench)
