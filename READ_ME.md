@@ -132,7 +132,7 @@ python kb_builder.py query \
 base ❯ conda activate py3.11
 py3.11 ❯ cd /Users/mo/Projects/FreeCAD_with_LLM/FreeCAD_API
 py3.11 ❯ export PYTHONPATH=/Applications/FreeCAD.app/Contents/Resources/lib:${PYTHONPATH}
-py3.11 ❯ export OPEN_API_KEY="xxxx"
+py3.11 ❯ export OPENAI_API_KEY="xxxx"
 py3.11 ❯ export DEEPSEEK_API_KEY="xxxx"
 py3.11 ❯ python app.py
 ```
