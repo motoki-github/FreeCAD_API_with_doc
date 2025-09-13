@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 from PySide2 import QtWidgets, QtCore
-from PySide2.QtGui import QPixmap, QCursor, QGuiApplication
+from PySide2.QtGui import QPixmap
 import FreeCAD as App
 import FreeCADGui as Gui
 from config_loader import CONFIG
@@ -18,51 +18,6 @@ from llm_client import get_openai_client
 from dialogs import ProviderModelDialog
 from rag_helper import RagHelper
 from image_utils import image_file_to_data_url
-
-
-class UserCancelled(Exception):
-    pass
-
-
-class FixedRatioSplitter(QtWidgets.QSplitter):
-    def __init__(self, ratios, parent=None):
-        super().__init__(QtCore.Qt.Horizontal, parent)
-        self.ratios = list(ratios)
-        self._lock = False
-        self.setChildrenCollapsible(False)
-
-    def setRatios(self, ratios):
-        self.ratios = list(ratios)
-        self._apply()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._apply()
-
-    def _apply(self):
-        if self._lock or self.count() != len(self.ratios):
-            return
-        self._lock = True
-        total = max(1, sum(self.ratios))
-        w = max(1, self.size().width())
-        sizes = [max(1, int(w * r / total)) for r in self.ratios]
-        diff = w - sum(sizes)
-        if diff != 0:
-            sizes[-1] = max(1, sizes[-1] + diff)
-        try:
-            self.setSizes(sizes)
-        finally:
-            self._lock = False
-
-    # ユーザーによるドラッグで比率が変わらないように無効化
-    def mousePressEvent(self, e):
-        e.ignore()
-
-    def mouseMoveEvent(self, e):
-        e.ignore()
-
-    def mouseReleaseEvent(self, e):
-        e.ignore()
 
 
 class FreeCADEmbedApp(QtWidgets.QMainWindow):
@@ -74,11 +29,6 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
         defaults = CONFIG.get("provider_defaults", {})
         default_text = f"{defaults.get('provider','ChatGPT')} : {defaults.get('model','gpt-4o-mini')}"
         dlg = ProviderModelDialog(combos, self, default_text=default_text)
-        try:
-            # ダイアログを画面中央へ移動
-            self._move_to_screen_center(dlg)
-        except Exception:
-            pass
         if dlg.exec_() != QtWidgets.QDialog.Accepted:
             sys.exit(0)
         provider_part, model_part = dlg.selected()
@@ -112,8 +62,6 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
         self.setWindowTitle(f"FreeCAD Embedded App ({self.provider} - {self.model_name})")
         ws = CONFIG.get("window_size", {"width": 1400, "height": 800})
         self.resize(int(ws.get("width", 1400)), int(ws.get("height", 800)))
-        # メインウィンドウが画面外に出ないよう非同期で位置をクランプ
-        QtCore.QTimer.singleShot(0, lambda: self._ensure_on_screen(self))
 
         # エラーリトライカウンタ
         self.error_count = 0
@@ -132,56 +80,30 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
         h_layout = QtWidgets.QHBoxLayout(central)
         h_layout.setContentsMargins(5,5,5,5)
         h_layout.setSpacing(5)
-        # 固定比率スプリッタ（1:1:2）
-        self.splitter = FixedRatioSplitter([1, 1, 2])
-        h_layout.addWidget(self.splitter)
 
         # 左ペイン: 問い合わせ
         left = QtWidgets.QWidget()
         left_layout = QtWidgets.QVBoxLayout(left)
         left_layout.setContentsMargins(0,0,0,0)
         left_layout.setSpacing(5)
-        # タグ: User Input
-        user_tag = QtWidgets.QLabel("User Input")
-        user_tag.setStyleSheet(
-            "QLabel { font-weight: 600; color: #333; background:#e3f2fd; border:1px solid #bbdefb; border-radius:4px; padding:2px 6px; }"
-        )
-        left_layout.addWidget(user_tag)
-        # プロンプトファイル選択（プロンプト表示エリアの上段）
-        file_row = QtWidgets.QHBoxLayout()
-        self.load_prompt_btn = QtWidgets.QPushButton("Select Prompt File")
-        self.prompt_file_label = QtWidgets.QLabel("No file selected")
-        self.prompt_file_label.setStyleSheet("color: #555;")
-        self.prompt_file_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-        self.prompt_file_label.setWordWrap(False)
-        self.prompt_file_label.setMinimumWidth(0)
-        self.prompt_file_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-        self.prompt_file_label_full = ""
-        self.prompt_file_label.installEventFilter(self)
-        file_row.addWidget(self.load_prompt_btn)
-        file_row.addWidget(self.prompt_file_label, 1)
-        left_layout.addLayout(file_row)
-
-        # プロンプト入力エリア
         self.query_edit = QtWidgets.QPlainTextEdit()
         self.query_edit.setPlaceholderText("問い合わせ内容を入力してください...")
         left_layout.addWidget(self.query_edit, 1)
-        # 右下にクリアボタン
-        clear_row = QtWidgets.QHBoxLayout()
-        clear_row.addStretch(1)
-        self.clear_prompt_btn = QtWidgets.QPushButton("Clear")
-        clear_row.addWidget(self.clear_prompt_btn)
-        left_layout.addLayout(clear_row)
-        # タグ: Image Upload
-        upload_tag = QtWidgets.QLabel("Image Upload")
-        upload_tag.setStyleSheet(
-            "QLabel { font-weight: 600; color: #333; background:#e3f2fd; border:1px solid #bbdefb; border-radius:4px; padding:2px 6px; }"
-        )
-        left_layout.addWidget(upload_tag)
+        # プロンプトファイル読込UI
+        file_row = QtWidgets.QHBoxLayout()
+        self.load_prompt_btn = QtWidgets.QPushButton("ファイルから読込")
+        self.prompt_file_label = QtWidgets.QLabel("未選択")
+        self.prompt_file_label.setStyleSheet("color: #555;")
+        self.prompt_file_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        file_row.addWidget(self.load_prompt_btn)
+        file_row.addWidget(self.prompt_file_label, 1)
+        left_layout.addLayout(file_row)
+        self.query_btn = QtWidgets.QPushButton("問い合わせ")
+        left_layout.addWidget(self.query_btn)
         # 画像入力UI
         img_controls = QtWidgets.QHBoxLayout()
-        self.add_image_btn = QtWidgets.QPushButton("Select Images")
-        self.remove_image_btn = QtWidgets.QPushButton("Delete Selected")
+        self.add_image_btn = QtWidgets.QPushButton("画像を追加")
+        self.remove_image_btn = QtWidgets.QPushButton("選択画像を削除")
         img_controls.addWidget(self.add_image_btn)
         img_controls.addWidget(self.remove_image_btn)
         left_layout.addLayout(img_controls)
@@ -193,57 +115,18 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
         self.image_preview = QtWidgets.QLabel()
         self.image_preview.setMinimumHeight(160)
         self.image_preview.setAlignment(QtCore.Qt.AlignCenter)
-        self.image_preview.setStyleSheet("QLabel { border: 1px solid #888; background: #888; }")
-        self.image_preview.setText("No Image Preview")
+        self.image_preview.setStyleSheet("QLabel { border: 1px solid #aaa; background: #fafafa; }")
+        self.image_preview.setText("画像プレビューなし")
         left_layout.addWidget(self.image_preview)
-
-        # 「問い合わせ」ボタンを画像プレビューの下へ配置（赤系配色）
-        self.query_btn = QtWidgets.QPushButton("Generate Code with LLM")
-        self.query_btn.setStyleSheet(
-            """
-            QPushButton {
-                background-color: #d32f2f;
-                color: white;
-                border: none;
-                padding: 8px 12px;
-                border-radius: 4px;
-                font-weight: 600;
-            }
-            QPushButton:hover { background-color: #e53935; }
-            QPushButton:pressed { background-color: #c62828; }
-            QPushButton:disabled { background-color: #ef9a9a; color: #fafafa; }
-            """
-        )
-        left_layout.addWidget(self.query_btn)
-
-        # AIレスポンスは中央カラムに配置
-        self.splitter.addWidget(left)
+        self.response_edit = QtWidgets.QPlainTextEdit()
+        self.response_edit.setReadOnly(True)
+        left_layout.addWidget(self.response_edit, 1)
+        h_layout.addWidget(left, 1)
 
         # 中央ペイン: コード
         center = QtWidgets.QWidget()
         center_layout = QtWidgets.QVBoxLayout(center)
         center_layout.setContentsMargins(0,0,0,0)
-        # セクション: AI Response
-        resp_section = QtWidgets.QWidget()
-        resp_layout = QtWidgets.QVBoxLayout(resp_section)
-        resp_layout.setContentsMargins(0,0,0,0)
-        ai_tag = QtWidgets.QLabel("AI Response")
-        ai_tag.setStyleSheet(
-            "QLabel { font-weight: 600; color: #333; background:#ede7f6; border:1px solid #d1c4e9; border-radius:4px; padding:2px 6px; }"
-        )
-        self.response_edit = QtWidgets.QPlainTextEdit()
-        self.response_edit.setReadOnly(True)
-        resp_layout.addWidget(ai_tag)
-        resp_layout.addWidget(self.response_edit, 1)
-
-        # セクション: Python code
-        code_section = QtWidgets.QWidget()
-        code_layout = QtWidgets.QVBoxLayout(code_section)
-        code_layout.setContentsMargins(0,0,0,0)
-        code_tag = QtWidgets.QLabel("Python Code")
-        code_tag.setStyleSheet(
-            "QLabel { font-weight: 600; color: #333; background:#ede7f6; border:1px solid #d1c4e9; border-radius:4px; padding:2px 6px; }"
-        )
         self.code_edit = QtWidgets.QPlainTextEdit()
         # 初期コードテンプレート
         tmpl_path = CONFIG.get("initial_code_template_path")
@@ -265,35 +148,16 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
                 "    box.Height = 30\n"
             )
         self.code_edit.setPlainText(code_tmpl)
-        self.model_btn = QtWidgets.QPushButton("Generate 3D-Model")
-        code_layout.addWidget(code_tag)
-        code_layout.addWidget(self.code_edit, 1)
-        code_layout.addWidget(self.model_btn)
-        # 中央の縦比を 1:2 に設定
-        center_layout.addWidget(resp_section)
-        center_layout.addWidget(code_section)
-        center_layout.setStretch(0, 1)
-        center_layout.setStretch(1, 2)
-        self.splitter.addWidget(center)
+        center_layout.addWidget(self.code_edit)
+        self.model_btn = QtWidgets.QPushButton("モデル生成")
+        center_layout.addWidget(self.model_btn)
+        h_layout.addWidget(center, 2)
 
         # 右ペイン: FreeCADビュー
         Gui.showMainWindow()
         self.doc = App.newDocument(CONFIG.get("freecad_doc_name", "EmbeddedDoc"))
         fc_widget = Gui.getMainWindow()
-        # タグ付きラッパーを作成
-        right_container = QtWidgets.QWidget()
-        right_layout = QtWidgets.QVBoxLayout(right_container)
-        right_layout.setContentsMargins(0,0,0,0)
-        right_layout.setSpacing(5)
-        freecad_tag = QtWidgets.QLabel("FreeCAD")
-        freecad_tag.setStyleSheet(
-            "QLabel { font-weight: 600; color: #333; background:#f1f8e9; border:1px solid #c5e1a5; border-radius:4px; padding:2px 6px; }"
-        )
-        right_layout.addWidget(freecad_tag, 0)
-        right_layout.addWidget(fc_widget, 1)
-        self.splitter.addWidget(right_container)
-        # 初期描画後に比率を適用
-        QtCore.QTimer.singleShot(0, self.splitter._apply)
+        h_layout.addWidget(fc_widget, 3)
 
         # 不要パネルを非表示
         self._hide_freecad_panels()
@@ -305,7 +169,6 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
         self.remove_image_btn.clicked.connect(self.on_remove_image)
         self.image_list.itemSelectionChanged.connect(self.on_image_selection_changed)
         self.load_prompt_btn.clicked.connect(self.on_load_prompt_file)
-        self.clear_prompt_btn.clicked.connect(self.on_clear_prompt)
 
         QtWidgets.QApplication.instance().aboutToQuit.connect(self._cleanup_freecad)
 
@@ -358,9 +221,10 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
             user_msg = {"role": "user", "content": content_parts}
         else:
             if image_paths:
-                self._show_info(
+                QtWidgets.QMessageBox.information(
+                    self,
                     "画像は無視されます",
-                    "現在のプロバイダ/モデルでは画像入力に未対応のため、テキストのみ送信します。",
+                    "現在のプロバイダ/モデルでは画像入力に未対応のため、テキストのみ送信します。"
                 )
             user_msg = {"role": "user", "content": prompt}
 
@@ -386,25 +250,21 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
             code = self.extract_code(text)
             self.code_edit.setPlainText(code)
             self.error_count = 0
-            self.perform_generate_with_retry(code, confirm_before_clear=True)
+            self.perform_generate_with_retry(code)
 
         except Exception as e:
-            self._show_error("エラー", f"{type(e).__name__}: {e}")
+            QtWidgets.QMessageBox.critical(self, "エラー", f"{type(e).__name__}: {e}")
 
     def extract_code(self, text):
         matches = re.findall(r"```(?:python)?\n(.*?)```", text, re.S)
         return "\n".join(matches) if matches else text
 
-    def perform_generate_with_retry(self, code, confirm_before_clear=False):
+    def perform_generate_with_retry(self, code):
         try:
-            self._generate_model(code, confirm_before_clear=confirm_before_clear)
+            self._generate_model(code)
             # 成功時はエラーカウントリセット
             self.error_count = 0
         except Exception as e:
-            # ユーザーキャンセルはリトライしない
-            if isinstance(e, UserCancelled):
-                self._show_info("キャンセル", "操作をキャンセルしました。")
-                return
             if not getattr(self, 'retry_enabled', True):
                 raise
             self.error_count += 1
@@ -423,10 +283,12 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
                 # 修正コードを再試行
                 code_to_try = self.extract_code(fix_code)
                 self.code_edit.setPlainText(code_to_try)
-                self.perform_generate_with_retry(code_to_try, confirm_before_clear=False)
+                self.perform_generate_with_retry(code_to_try)
             else:
                 # 3回失敗時は通知
-                self._show_info("連続エラー", f"モデル生成が{limit}回連続で失敗しました。手動でご確認ください。")
+                QtWidgets.QMessageBox.information(
+                    self, "連続エラー", f"モデル生成が{limit}回連続で失敗しました。手動でご確認ください。"
+                )
 
     def _model_supports_vision(self, provider, model):
         supported = set(CONFIG.get("vision", {}).get("supported_models", ["gpt-4o", "gpt-4o-mini"]))
@@ -435,12 +297,11 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
     # 画像のDataURL変換は image_utils.image_file_to_data_url を使用
 
     def on_add_image(self):
-        files = self._open_files_dialog(
-            caption="画像ファイルを選択",
-            name_filter=CONFIG.get("images", {}).get(
-                "file_filter",
-                "画像ファイル (*.png *.jpg *.jpeg *.gif *.webp *.bmp);;すべてのファイル (*)",
-            ),
+        files, _ = QtWidgets.QFileDialog.getOpenFileNames(
+            self,
+            "画像ファイルを選択",
+            "",
+            CONFIG.get("images", {}).get("file_filter", "画像ファイル (*.png *.jpg *.jpeg *.gif *.webp *.bmp);;すべてのファイル (*)"),
         )
         if not files:
             return
@@ -498,13 +359,15 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
 
     def on_load_prompt_file(self):
         # テキスト/Markdown/JSON/YAML を対象に読込
-        filt = CONFIG.get(
-            "prompt_file_filter",
-            "テキスト (*.txt *.md *.markdown *.json *.yaml *.yml);;すべてのファイル (*)",
+        filt = (
+            CONFIG.get("prompt_file_filter",
+                       "テキスト (*.txt *.md *.markdown *.json *.yaml *.yml);;すべてのファイル (*)")
         )
-        path = self._open_file_dialog(
-            caption="プロンプトファイルを選択",
-            name_filter=filt,
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "プロンプトファイルを選択",
+            "",
+            filt,
         )
         if not path:
             return
@@ -529,81 +392,11 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
                 prompt_text = content
 
             self.query_edit.setPlainText(prompt_text.strip())
-            self.prompt_file_label_full = path
-            self.prompt_file_label.setToolTip(path)
-            self._update_prompt_file_label_elide()
+            self.prompt_file_label.setText(path)
         except Exception as e:
-            self._show_error("読込エラー", f"{type(e).__name__}: {e}")
+            QtWidgets.QMessageBox.critical(self, "読込エラー", f"{type(e).__name__}: {e}")
 
-    def on_clear_prompt(self):
-        self.query_edit.clear()
-        # ファイル選択情報は維持（必要なら以下を有効化）
-        # self.prompt_file_label.setText("未選択")
-
-    def _update_prompt_file_label_elide(self):
-        try:
-            full = getattr(self, "prompt_file_label_full", "") or "未選択"
-            width = max(10, self.prompt_file_label.width() - 4)
-            fm = self.prompt_file_label.fontMetrics()
-            elided = fm.elidedText(full, QtCore.Qt.ElideMiddle, width)
-            self.prompt_file_label.setText(elided)
-        except Exception:
-            # フォールバック
-            pass
-
-    def eventFilter(self, obj, event):
-        if obj is self.prompt_file_label and event.type() == QtCore.QEvent.Resize:
-            self._update_prompt_file_label_elide()
-        return super().eventFilter(obj, event)
-
-    # 中央配置で開くファイルダイアログ（単一ファイル）
-    def _open_file_dialog(self, caption: str, name_filter: str, directory: str = "") -> str:
-        dlg = QtWidgets.QFileDialog(self, caption, directory, name_filter)
-        dlg.setFileMode(QtWidgets.QFileDialog.ExistingFile)
-        # ネイティブダイアログはOS側の位置制御になるため無効化してQt管理に
-        dlg.setOption(QtWidgets.QFileDialog.DontUseNativeDialog, True)
-        try:
-            self._move_to_screen_center(dlg)
-        except Exception:
-            pass
-        if dlg.exec_() == QtWidgets.QDialog.Accepted:
-            sel = dlg.selectedFiles()
-            return sel[0] if sel else ""
-        return ""
-
-    # 中央配置で開くファイルダイアログ（複数ファイル）
-    def _open_files_dialog(self, caption: str, name_filter: str, directory: str = "") -> list:
-        dlg = QtWidgets.QFileDialog(self, caption, directory, name_filter)
-        dlg.setFileMode(QtWidgets.QFileDialog.ExistingFiles)
-        dlg.setOption(QtWidgets.QFileDialog.DontUseNativeDialog, True)
-        try:
-            self._move_to_screen_center(dlg)
-        except Exception:
-            pass
-        if dlg.exec_() == QtWidgets.QDialog.Accepted:
-            return dlg.selectedFiles()
-        return []
-
-    def _confirm_clear_objects(self) -> bool:
-        msg = QtWidgets.QMessageBox(self)
-        msg.setWindowTitle("確認")
-        msg.setIcon(QtWidgets.QMessageBox.Warning)
-        msg.setText("既存オブジェクトを削除して続行しますか？\nこの操作は取り消せません。")
-        yes = msg.addButton("削除して続行", QtWidgets.QMessageBox.AcceptRole)
-        no = msg.addButton("キャンセル", QtWidgets.QMessageBox.RejectRole)
-        msg.setDefaultButton(no)
-        try:
-            self._move_to_screen_center(msg)
-        except Exception:
-            pass
-        msg.exec_()
-        return msg.clickedButton() is yes
-
-    def _generate_model(self, code, confirm_before_clear=False):
-        # 破壊的操作の確認（既存オブジェクトがある場合のみ）
-        if confirm_before_clear and len(self.doc.Objects) > 0:
-            if not self._confirm_clear_objects():
-                raise UserCancelled("ユーザーによりキャンセル")
+    def _generate_model(self, code):
         # FreeCADオブジェクトクリア
         for obj in list(self.doc.Objects):
             self.doc.removeObject(obj.Name)
@@ -624,10 +417,10 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
         code = self.code_edit.toPlainText()
         self.error_count = 0
         try:
-            self.perform_generate_with_retry(code, confirm_before_clear=True)
+            self.perform_generate_with_retry(code)
         except Exception as e:
             # ここは通常通らない
-            self._show_error("致命的エラー", str(e))
+            QtWidgets.QMessageBox.critical(self, "致命的エラー", str(e))
 
     def _cleanup_freecad(self):
         try: App.closeDocument(self.doc.Name)
@@ -638,70 +431,6 @@ class FreeCADEmbedApp(QtWidgets.QMainWindow):
     def closeEvent(self, event):
         self._cleanup_freecad()
         super().closeEvent(event)
-
-    # 画面外配置の防止ユーティリティとメッセージボックスヘルパ
-    def showEvent(self, event):
-        super().showEvent(event)
-        try:
-            self._ensure_on_screen(self)
-        except Exception:
-            pass
-    def _get_available_geometry(self, w: QtWidgets.QWidget | None = None) -> QtCore.QRect:
-        screen = None
-        try:
-            if w is not None and w.windowHandle() is not None:
-                screen = w.windowHandle().screen()
-        except Exception:
-            screen = None
-        if screen is None:
-            try:
-                screen = QGuiApplication.screenAt(QCursor.pos())
-            except Exception:
-                screen = None
-        if screen is None:
-            screen = QGuiApplication.primaryScreen()
-        try:
-            return screen.availableGeometry() if screen else QtCore.QRect(0, 0, 1920, 1080)
-        except Exception:
-            return QtCore.QRect(0, 0, 1920, 1080)
-
-    def _ensure_on_screen(self, w: QtWidgets.QWidget):
-        if not w:
-            return
-        ag = self._get_available_geometry(w)
-        if w.width() <= 0 or w.height() <= 0:
-            w.adjustSize()
-        fg = w.frameGeometry()
-        max_w = max(100, fg.width())
-        max_h = max(80, fg.height())
-        x = max(ag.left(), min(fg.x(), ag.right() - max_w + 1))
-        y = max(ag.top(),  min(fg.y(), ag.bottom() - max_h + 1))
-        w.move(x, y)
-
-    def _move_to_screen_center(self, w: QtWidgets.QWidget):
-        if not w:
-            return
-        ag = self._get_available_geometry(w)
-        w.adjustSize()
-        fg = w.frameGeometry()
-        fg.moveCenter(ag.center())
-        w.move(fg.topLeft())
-
-    def _show_info(self, title: str, text: str):
-        msg = QtWidgets.QMessageBox(self)
-        msg.setIcon(QtWidgets.QMessageBox.Information)
-        msg.setWindowTitle(title)
-        msg.setText(text)
-        self._move_to_screen_center(msg)
-        msg.exec_()
-
-    def _show_error(self, title: str, text: str):
-        msg = QtWidgets.QMessageBox(self)
-        msg.setIcon(QtWidgets.QMessageBox.Critical)
-        msg.setWindowTitle(title)
-        msg.setText(text)
-        self._move_to_screen_center(msg)
-        msg.exec_()
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)

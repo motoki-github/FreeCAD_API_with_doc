@@ -130,12 +130,20 @@ python kb_builder.py query \
 
 ```bash
 base ❯ conda activate py3.11
-py3.11 ❯ cd /Users/mo/Projects/FreeCAD_with_LLM/FreeCAD_API
+py3.11 ❯ cd /Users/mo/Projects/FreeCAD_with_LLM/FreeCAD_API_with_doc
 py3.11 ❯ export PYTHONPATH=/Applications/FreeCAD.app/Contents/Resources/lib:${PYTHONPATH}
 py3.11 ❯ export OPENAI_API_KEY="xxxx"
 py3.11 ❯ export DEEPSEEK_API_KEY="xxxx"
 py3.11 ❯ python app.py
 ```
+
+---
+
+## プロンプト入力（2パターン）
+
+- テキスト入力: 左ペイン上部のテキスト欄に直接入力し、【問い合わせ】を押下。
+- ファイルから読み込み: 【ファイルから読込】を押下し、`.txt` / `.md` / `.json` / `.yaml` を選択。読み込まれた内容がテキスト欄に反映され、そのまま【問い合わせ】で送信。
+  - JSONで`[{"role":"user","content":"..."}, ...]`形式の場合は、`role=="user"`の`content`を連結してテキスト化します。
 
 ---
 

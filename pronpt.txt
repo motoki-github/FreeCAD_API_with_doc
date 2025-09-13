@@ -1,0 +1,37 @@
+Plate_A: w200 l100 h20
+
+Cylinder_A: d20 h100
+XY：Plate_Aの各辺から15の線の交点4箇所に
+Z：PlateAの上面とCylinderAの底面を合わせて
+
+Plate_B: w220 l120 h15
+XY：Plate_A の上面中心とPlate B上面を合わせて
+Z：Cylinder_Aの上面とPlate B底面を合わせて
+
+Cylinder_B: d50 h90
+XY：Plate_Bの上面中心とCylinder_B の中心を合わせて
+Z：Plate_Bの上面とCylinder_Bの底面を合わせて
+
+Cylinder_C: d30 h20
+XY：Plate_Bの下面中心とCylinder_Cの上面中心を合わせて
+Z：Plate_Bの底面とCylinder_Cの上面を合わせて
+
+Cylinder_D: d40 h10
+XY：Cylinder_C の中心とCylinder_D と中心を合わせて
+Z：Cylinder_Cの底面とCylinder_Dの上面を合わせて
+
+Block_A: w60 l60 h30
+XY：Plate Aの上面中心とBlock_Aの底面中心を合わせて
+Z：Plate_Aの上面とBlock_Aの底面を合わせて
+Block_Aの上面中心から d40 h15 をカット
+
+Plate_C: w100 l25 h10
+XY：Cylinder_Bの上面中心とPlate_Cの下面中心からX方向に＋25の位置を合わせて
+Z：Cylinder_Bの上面とPlate_Cの下面を合わせて
+
+Cylinder_E: d15 h100
+XY：Plate_Cの下面中心からCylinder_Eの上面中心からX方向に＋30の位置を合わせて
+Z：Plate_Cの下面とCylinder_Eの上面を合わせて
+
+
+デザイナーを明記
